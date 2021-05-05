@@ -11,7 +11,29 @@ exception Intervals_are_not_sorted
 
 exception Intervals_are_not_disjoint
 
-type timestamp = Span.t
+module Timestamp' : sig
+  type t
+
+  val min_val : t
+
+  val max_val : t
+end = struct
+  type t = Span.t
+
+  let min_val = Constants.timestamp_min
+
+  let max_val = Constants.timestamp_max
+
+  let of_span x =
+    if Span.(min_val <= x && x < max_val) then
+      Some x
+    else
+      None
+
+  let now () : t = Span.of_float @@ Unix.gettimeofday ()
+end
+
+type timestamp = Timestamp'.t
 
 let one_ns = Span.make ~ns:1 ()
 
@@ -909,15 +931,9 @@ module Year_ranges = Ranges.Make (struct
     let of_int x = x
   end)
 
-let timestamp_now () : timestamp = Span.of_float @@ Unix.gettimeofday ()
-
-let timestamp_min = Constants.timestamp_min
-
-let timestamp_max = Constants.timestamp_max
-
 let slice_valid_interval s =
-  Intervals.Slice.slice ~skip_check:true ~start:timestamp_min
-    ~end_exc:timestamp_max s
+  Intervals.Slice.slice ~skip_check:true ~start:Constants.timestamp_min
+    ~end_exc:Constants.timestamp_max s
 
 module type Dt_base = sig
   type t
