@@ -3,31 +3,71 @@ open Timestamp_utils
 
 type timestamp = Timedesc.Span.t
 
-type search_space = Time.Interval'.t list
+type space = Time.Interval'.t list
 
 let default_search_space_start = Timedesc.Timestamp.min_val
 
 let default_search_space_end_exc = Timedesc.Timestamp.max_val
 
-let default_search_space : search_space =
+let default_space : space =
   [ (default_search_space_start, default_search_space_end_exc) ]
+
+module Search_space : sig
+  type t
+
+  val default : t
+
+  val empty : t
+
+  val of_space : space -> t
+
+  val to_space : t -> space
+end = struct
+  type t = space
+
+  let default = default_space
+
+  let empty = []
+
+  let of_space x = x
+
+  let to_space x = x
+end
+
+module Result_space : sig
+  type t
+
+  val default : t
+
+  val of_space : space -> t
+
+  val to_space : t -> space
+end = struct
+  type t = space
+
+  let default = default_space
+
+  let of_space x = x
+
+  let to_space x = x
+end
 
 type t =
   | Empty
   | All
-  | Intervals of search_space * Time.Interval'.t Seq.t
-  | Pattern of search_space * Pattern.t
-  | Unary_op of search_space * unary_op * t
-  | Inter_seq of search_space * t Seq.t
-  | Union_seq of search_space * t Seq.t
+  | Intervals of Search_space.t * Time.Interval'.t Seq.t
+  | Pattern of Search_space.t * Pattern.t
   | Bounded_intervals of {
-      search_space : search_space;
+      search_space : Search_space.t;
       pick : [ `Whole | `Snd ];
       bound : Timedesc.Span.t;
       start : Points.t;
       end_exc : Points.t;
     }
-  | Unchunk of search_space * chunked
+  | Unary_op of Result_space.t * unary_op * t
+  | Inter_seq of Result_space.t * t Seq.t
+  | Union_seq of Result_space.t * t Seq.t
+  | Unchunk of Result_space.t * chunked
 
 and chunked =
   | Unary_op_on_t of chunked_unary_op_on_t * t
@@ -37,16 +77,16 @@ let rec t_of_ast (ast : Time_ast.t) : t =
   match ast with
   | Empty -> Empty
   | All -> All
-  | Intervals s -> Intervals (default_search_space, s)
-  | Pattern p -> Pattern (default_search_space, p)
-  | Unary_op (op, t) -> Unary_op (default_search_space, op, t_of_ast t)
-  | Inter_seq s -> Inter_seq (default_search_space, Seq.map t_of_ast s)
-  | Union_seq s -> Union_seq (default_search_space, Seq.map t_of_ast s)
+  | Intervals s -> Intervals (Search_space.default, s)
+  | Pattern p -> Pattern (Search_space.default, p)
+  | Unary_op (op, t) -> Unary_op (Result_space.default, op, t_of_ast t)
+  | Inter_seq s -> Inter_seq (Result_space.default, Seq.map t_of_ast s)
+  | Union_seq s -> Union_seq (Result_space.default, Seq.map t_of_ast s)
   | Bounded_intervals { pick; bound; start; end_exc } ->
     Bounded_intervals
-      { search_space = default_search_space; pick; bound; start; end_exc }
+      { search_space = Search_space.default; pick; bound; start; end_exc }
   | Unchunk chunked ->
-    Unchunk (default_search_space, chunked_of_ast_chunked chunked)
+    Unchunk (Result_space.default, chunked_of_ast_chunked chunked)
 
 and chunked_of_ast_chunked (c : Time_ast.chunked) : chunked =
   match c with
@@ -54,19 +94,27 @@ and chunked_of_ast_chunked (c : Time_ast.chunked) : chunked =
   | Unary_op_on_chunked (op, chunked) ->
     Unary_op_on_chunked (op, chunked_of_ast_chunked chunked)
 
-let get_search_space (time : t) : Time.Interval'.t list =
-  match time with
-  | All -> default_search_space
-  | Empty -> []
-  | Intervals (s, _) -> s
-  | Pattern (s, _) -> s
-  | Unary_op (s, _, _) -> s
-  | Inter_seq (s, _) -> s
-  | Union_seq (s, _) -> s
-  | Bounded_intervals { search_space; _ } -> search_space
-  | Unchunk (s, _) -> s
+let search_space_of_result_space x =
+  Search_space.of_space @@ Result_space.to_space x
 
-let search_space_of_result_space (time : t) space : search_space =
+let result_space_of_search_space x =
+  Result_space.of_space @@ Search_space.to_space x
+
+let get_result_space (time : t) : Result_space.t =
+  match time with
+  | All -> result_space_of_search_space Search_space.default
+  | Empty -> result_space_of_search_space Search_space.empty
+  | Intervals (s, _) -> result_space_of_search_space s
+  | Pattern (s, _) -> result_space_of_search_space s
+  | Bounded_intervals { search_space; _ } -> result_space_of_search_space search_space
+  | Unary_op (r, _, _) -> r
+  | Inter_seq (r, _) -> r
+  | Union_seq (r, _) -> r
+  | Unchunk (r, _) -> r
+
+let get_search_space (time : t) : Search_space.t =
+
+let search_space_of_result_space (time : t) (space : Result_space.t) : Search_space.t =
   let open Timedesc.Span in
   match time with
   | All | Empty | Intervals _ | Pattern _ -> space
@@ -115,6 +163,36 @@ let set_search_space space (time : t) : t =
   | Bounded_intervals { search_space = _; pick; bound; start; end_exc } ->
     Bounded_intervals { search_space = space; pick; bound; start; end_exc }
   | Unchunk (_, c) -> Unchunk (space, c)
+
+(* let get_result_space (time : t) : search_space =
+ *   let search_space =
+ *     get_search_space time
+ *   in
+ *   match time with
+ *   | All
+ *   | Empty
+ *   | Intervals _
+ *   | Pattern _
+ *     ->
+ *     search_space
+ *   | Unary_op (_, op, _) -> (
+ *       match op with
+ *       | Not
+ *       | With_tz _ ->
+ *         search_space
+ *       | Shift n ->
+ *         List.map (fun (x, y) ->
+ *             (timestamp_safe_add x n, timestamp_safe_add y n))
+ *           search_space
+ *       | Lengthen n ->
+ *         search_space
+ *         |> CCList.to_seq
+ *         |> Seq.map (fun (x, y) -> (x, timestamp_safe_add y n))
+ *         |> Time.Intervals.normalize
+ *         |> CCList.of_seq
+ *     )
+ *   | Inter_seq (_, s) ->
+ *   | _ -> failwith "Unimplemented" *)
 
 let search_space_of_year_range tz year_range =
   let aux_start start =
